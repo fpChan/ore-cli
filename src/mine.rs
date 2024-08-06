@@ -24,7 +24,8 @@ use crate::{
     Miner,
 };
 
-const MIN: u32 = 19;
+const MIN: u32 = 17;
+const LIMIT_SEC: u64 = 120;
 
 impl Miner {
     pub async fn mine(&self, args: MineArgs) {
@@ -47,32 +48,32 @@ impl Miner {
 
             // Run drillx
             let config = get_config(&self.rpc_client).await;
-            if let Some(solution) = Self::find_hash_par(
+            let solution = Self::find_hash_par(
                 proof.clone(),
                 args.threads,
                 MIN, // min_difficulty
-            )
-                .await
-            {
-                // Submit most difficult hash immediately
-                let mut compute_budget = 500_000;
-                let mut ixs = vec![ore_api::instruction::auth(proof_pubkey(signer.pubkey()))];
-                if self.should_reset(config).await && rand::thread_rng().gen_range(0..100).eq(&0) {
-                    compute_budget += 100_000;
-                    ixs.push(ore_api::instruction::reset(signer.pubkey()));
-                }
-                ixs.push(ore_api::instruction::mine(
-                    signer.pubkey(),
-                    signer.pubkey(),
-                    find_bus(),
-                    solution,
-                ));
-                match self.send_and_confirm(&ixs, ComputeBudget::Fixed(compute_budget), false).await {
-                    Ok(_) => println!("{}", "Successfully submitted mining solution.".green()),
-                    Err(e) => println!("{} {}", "Failed to submit mining solution:".red(), e),
+            ).await;
+
+            if let Some(solution) = solution {
+                    // Submit most difficult hash immediately
+                    let mut compute_budget = 500_000;
+                    let mut ixs = vec![ore_api::instruction::auth(proof_pubkey(signer.pubkey()))];
+                    if self.should_reset(config).await && rand::thread_rng().gen_range(0..100).eq(&0) {
+                        compute_budget += 100_000;
+                        ixs.push(ore_api::instruction::reset(signer.pubkey()));
+                    }
+                    ixs.push(ore_api::instruction::mine(
+                        signer.pubkey(),
+                        signer.pubkey(),
+                        find_bus(),
+                        solution,
+                    ));
+                    match self.send_and_confirm(&ixs, ComputeBudget::Fixed(compute_budget), false).await {
+                        Ok(_) => println!("{}", "Successfully submitted mining solution.".green()),
+                        Err(e) => println!("{} {}", "Failed to submit mining solution:".red(), e),
                 }
             } else {
-                println!("{}", "No solution found meeting minimum difficulty. Continuing to mine...".yellow());
+                println!("{}", "No solution found. Continuing to mine...".yellow());
             }
 
             // Small delay to prevent tight looping
@@ -92,6 +93,8 @@ impl Miner {
         let best_difficulty = Arc::new(AtomicU32::new(0));
         let best_hash = Arc::new(std::sync::RwLock::new(Hash::default()));
         let solution_found = Arc::new(AtomicBool::new(false));
+        let start_time = Instant::now();
+        let time_limit = Duration::from_secs(LIMIT_SEC); // 2 minutes
 
         let handles: Vec<_> = (0..threads)
             .map(|i| {
@@ -106,32 +109,34 @@ impl Miner {
                         let mut memory = equix::SolverMemory::new();
                         let mut nonce = u64::MAX.saturating_div(threads).saturating_mul(i);
 
-                        while !solution_found.load(Ordering::Relaxed) {
+                        while !solution_found.load(Ordering::Relaxed) && start_time.elapsed() < time_limit {
                             if let Ok(hx) = drillx::hash_with_memory(
                                 &mut memory,
                                 &proof.challenge,
                                 &nonce.to_le_bytes(),
                             ) {
                                 let difficulty = hx.difficulty();
-                                if difficulty >= min_difficulty {
+                                let current_best = best_difficulty.load(Ordering::Relaxed);
+                                if difficulty > current_best {
                                     best_nonce.store(nonce, Ordering::Relaxed);
                                     best_difficulty.store(difficulty, Ordering::Relaxed);
                                     let mut best_hash_guard = best_hash.write().unwrap();
                                     best_hash_guard.h.copy_from_slice(&hx.h);
                                     best_hash_guard.d = hx.d;
-                                    println!("Solution found: {} (difficulty: {})",
+                                    println!("New best solution found: {} (difficulty: {})",
                                              bs58::encode(hx.h).into_string(), difficulty);
-                                    solution_found.store(true, Ordering::Relaxed);
-                                    break;
-                                } else if difficulty + 2 >= min_difficulty {
-                                    println!("Solution found: {} (difficulty: {})", bs58::encode(hx.h).into_string(), difficulty);
+
+                                    if difficulty >= min_difficulty {
+                                        solution_found.store(true, Ordering::Relaxed);
+                                        break;
+                                    }
                                 }
                             }
 
                             nonce += 1;
 
                             if i == 0 && nonce % 1000 == 0 {
-                                progress_bar.set_message(format!("Mining... (nonce: {})", nonce));
+                                progress_bar.set_message(format!("Mining... (nonce: {}, time: {:?})", nonce, start_time.elapsed()));
                             }
                         }
                     }
@@ -156,11 +161,7 @@ impl Miner {
             final_best_difficulty
         ));
 
-        if final_best_difficulty >= min_difficulty {
-            Some(Solution::new(final_best_hash.d, final_best_nonce.to_le_bytes()))
-        } else {
-            None
-        }
+        Some(Solution::new(final_best_hash.d, final_best_nonce.to_le_bytes()))
     }
 
     pub fn check_num_cores(&self, threads: u64) {
