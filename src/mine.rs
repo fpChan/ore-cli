@@ -23,6 +23,8 @@ use crate::{
     Miner,
 };
 
+const MIN: u32 = 20;
+
 impl Miner {
     pub async fn mine(&self, args: MineArgs) {
         // Register, if needed.
@@ -31,9 +33,6 @@ impl Miner {
 
         // Check num threads
         self.check_num_cores(args.threads);
-
-        let mut last_submit_time = Instant::now();
-        let submit_interval = Duration::from_secs(200);
 
         // Start mining loop
         loop {
@@ -50,35 +49,27 @@ impl Miner {
             if let Some(solution) = Self::find_hash_par(
                 proof.clone(),
                 args.threads,
-                21, // min_difficulty
-                Duration::from_secs(60), // 增加到 60 秒，以提高找到解的概率
+                MIN, // min_difficulty
+                Duration::from_secs(80), // 增加到 60 秒，以提高找到解的概率
             )
                 .await
             {
-                // Check if it's time to submit
-                if last_submit_time.elapsed() >= submit_interval {
-                    // Submit most difficult hash
-                    let mut compute_budget = 500_000;
-                    let mut ixs = vec![ore_api::instruction::auth(proof_pubkey(signer.pubkey()))];
-                    if self.should_reset(config).await && rand::thread_rng().gen_range(0..100).eq(&0) {
-                        compute_budget += 100_000;
-                        ixs.push(ore_api::instruction::reset(signer.pubkey()));
-                    }
-                    ixs.push(ore_api::instruction::mine(
-                        signer.pubkey(),
-                        signer.pubkey(),
-                        find_bus(),
-                        solution,
-                    ));
-                    match self.send_and_confirm(&ixs, ComputeBudget::Fixed(compute_budget), false).await {
-                        Ok(_) => println!("{}", "Successfully submitted mining solution.".green()),
-                        Err(e) => println!("{} {}", "Failed to submit mining solution:".red(), e),
-                    }
-
-                    last_submit_time = Instant::now();
-                } else {
-                    println!("Found solution, but waiting for submit interval. Time remaining: {} seconds",
-                             (submit_interval - last_submit_time.elapsed()).as_secs());
+                // Submit most difficult hash immediately
+                let mut compute_budget = 500_000;
+                let mut ixs = vec![ore_api::instruction::auth(proof_pubkey(signer.pubkey()))];
+                if self.should_reset(config).await && rand::thread_rng().gen_range(0..100).eq(&0) {
+                    compute_budget += 100_000;
+                    ixs.push(ore_api::instruction::reset(signer.pubkey()));
+                }
+                ixs.push(ore_api::instruction::mine(
+                    signer.pubkey(),
+                    signer.pubkey(),
+                    find_bus(),
+                    solution,
+                ));
+                match self.send_and_confirm(&ixs, ComputeBudget::Fixed(compute_budget), false).await {
+                    Ok(_) => println!("{}", "Successfully submitted mining solution.".green()),
+                    Err(e) => println!("{} {}", "Failed to submit mining solution:".red(), e),
                 }
             } else {
                 println!("{}", "No solution found meeting minimum difficulty. Continuing to mine...".yellow());
