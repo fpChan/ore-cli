@@ -24,7 +24,7 @@ use crate::{
     Miner,
 };
 
-const MIN: u32 = 21;
+const MIN: u32 = 19;
 
 impl Miner {
     pub async fn mine(&self, args: MineArgs) {
