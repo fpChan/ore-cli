@@ -1,5 +1,6 @@
 use std::{sync::Arc, time::Instant};
-
+use std::sync::atomic::{AtomicU64, AtomicU32, Ordering};
+use std::time::Duration;
 use colored::*;
 use drillx::{
     equix::{self},
@@ -30,6 +31,9 @@ impl Miner {
         // Check num threads
         self.check_num_cores(args.threads);
 
+        let mut last_submit_time = Instant::now();
+        let submit_interval = Duration::from_secs(120); // 两分钟提交一次
+
         // Start mining loop
         loop {
             // Fetch proof
@@ -39,122 +43,157 @@ impl Miner {
                 amount_u64_to_string(proof.balance)
             );
 
-            // Calc cutoff time
-            let cutoff_time = self.get_cutoff(proof, args.buffer_time).await;
-
             // Run drillx
             let config = get_config(&self.rpc_client).await;
-            let solution = Self::find_hash_par(
-                proof,
-                cutoff_time,
+            if let Some(solution) = Self::find_hash_par(
+                proof.clone(),
                 args.threads,
-                20
+                20, // min_difficulty
+                submit_interval,
             )
-            .await;
-
-            // Submit most difficult hash
-            let mut compute_budget = 500_000;
-            let mut ixs = vec![ore_api::instruction::auth(proof_pubkey(signer.pubkey()))];
-            if self.should_reset(config).await && rand::thread_rng().gen_range(0..100).eq(&0) {
-                compute_budget += 100_000;
-                ixs.push(ore_api::instruction::reset(signer.pubkey()));
-            }
-            ixs.push(ore_api::instruction::mine(
-                signer.pubkey(),
-                signer.pubkey(),
-                find_bus(),
-                solution,
-            ));
-            self.send_and_confirm(&ixs, ComputeBudget::Fixed(compute_budget), false)
                 .await
-                .ok();
+            {
+                // Check if it's time to submit
+                if last_submit_time.elapsed() >= submit_interval {
+                    // Submit most difficult hash
+                    let mut compute_budget = 500_000;
+                    let mut ixs = vec![ore_api::instruction::auth(proof_pubkey(signer.pubkey()))];
+                    if self.should_reset(config).await && rand::thread_rng().gen_range(0..100).eq(&0) {
+                        compute_budget += 100_000;
+                        ixs.push(ore_api::instruction::reset(signer.pubkey()));
+                    }
+                    ixs.push(ore_api::instruction::mine(
+                        signer.pubkey(),
+                        signer.pubkey(),
+                        find_bus(),
+                        solution,
+                    ));
+                    match self.send_and_confirm(&ixs, ComputeBudget::Fixed(compute_budget), false).await {
+                        Ok(_) => println!("{}", "Successfully submitted mining solution.".green()),
+                        Err(e) => println!("{} {}", "Failed to submit mining solution:".red(), e),
+                    }
+
+                    last_submit_time = Instant::now();
+                } else {
+                    println!("Found solution, but waiting for submit interval. Time remaining: {} seconds",
+                             (submit_interval - last_submit_time.elapsed()).as_secs());
+                }
+            } else {
+                println!("{}", "No solution found meeting minimum difficulty. Continuing to mine...".yellow());
+            }
+
+            // Small delay to prevent tight looping
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
     }
 
     async fn find_hash_par(
         proof: Proof,
-        cutoff_time: u64,
         threads: u64,
         min_difficulty: u32,
-    ) -> Solution {
-        // Dispatch job to each thread
+        duration: Duration,
+    ) -> Option<Solution> {
+        let start_time = Instant::now();
         let progress_bar = Arc::new(spinner::new_progress_bar());
         progress_bar.set_message("Mining...");
+
+        let best_nonce = Arc::new(AtomicU64::new(0));
+        let best_difficulty = Arc::new(AtomicU32::new(0));
+        let best_hash = Arc::new(std::sync::RwLock::new(Hash::default()));
+
+        let chunk_size = 10_000; // 增大块大小以减少同步开销
+
         let handles: Vec<_> = (0..threads)
             .map(|i| {
                 std::thread::spawn({
                     let proof = proof.clone();
                     let progress_bar = progress_bar.clone();
-                    let mut memory = equix::SolverMemory::new();
+                    let best_nonce = best_nonce.clone();
+                    let best_difficulty = best_difficulty.clone();
+                    let best_hash = best_hash.clone();
                     move || {
-                        let timer = Instant::now();
-                        let mut nonce = u64::MAX.saturating_div(threads).saturating_mul(i);
-                        let mut best_nonce = nonce;
-                        let mut best_difficulty = 0;
-                        let mut best_hash = Hash::default();
-                        loop {
-                            // Create hash
-                            if let Ok(hx) = drillx::hash_with_memory(
-                                &mut memory,
-                                &proof.challenge,
-                                &nonce.to_le_bytes(),
-                            ) {
-                                let difficulty = hx.difficulty();
-                                if difficulty.gt(&best_difficulty) {
-                                    best_nonce = nonce;
-                                    best_difficulty = difficulty;
-                                    best_hash = hx;
-                                }
-                            }
+                        let mut memory = equix::SolverMemory::new();
+                        let mut local_best_nonce = 0;
+                        let mut local_best_difficulty = 0;
+                        let mut local_best_hash = Hash::default();
+                        let mut nonce_base = u64::MAX / threads * i;
 
-                            // Exit if time has elapsed
-                            if nonce % 100 == 0 {
-                                if timer.elapsed().as_secs().ge(&cutoff_time) {
-                                    if best_difficulty.gt(&min_difficulty) {
-                                        // Mine until min difficulty has been met
-                                        break;
+                        while start_time.elapsed() < duration {
+                            for nonce in nonce_base..nonce_base + chunk_size {
+                                if let Ok(hx) = drillx::hash_with_memory(
+                                    &mut memory,
+                                    &proof.challenge,
+                                    &nonce.to_le_bytes(),
+                                ) {
+                                    let difficulty = hx.difficulty();
+                                    if difficulty > local_best_difficulty {
+                                        local_best_nonce = nonce;
+                                        local_best_difficulty = difficulty;
+                                        local_best_hash = hx;
+
+                                        // 更新全局最佳结果
+                                        let mut current_best = best_difficulty.load(Ordering::Relaxed);
+                                        while local_best_difficulty > current_best {
+                                            match best_difficulty.compare_exchange_weak(
+                                                current_best,
+                                                local_best_difficulty,
+                                                Ordering::SeqCst,
+                                                Ordering::Relaxed,
+                                            ) {
+                                                Ok(_) => {
+                                                    best_nonce.store(local_best_nonce, Ordering::Relaxed);
+                                                    let mut best_hash_guard = best_hash.write().unwrap();
+                                                    best_hash_guard.h.copy_from_slice(&local_best_hash.h);
+                                                    best_hash_guard.d = local_best_hash.d;
+                                                    break;
+                                                }
+                                                Err(x) => current_best = x,
+                                            }
+                                        }
                                     }
-                                } else if i == 0 {
-                                    progress_bar.set_message(format!(
-                                        "Mining... ({} sec remaining)",
-                                        cutoff_time.saturating_sub(timer.elapsed().as_secs()),
-                                    ));
+                                }
+
+                                if nonce % 1000 == 0 && start_time.elapsed() >= duration {
+                                    break;
                                 }
                             }
 
-                            // Increment nonce
-                            nonce += 1;
-                        }
+                            nonce_base += chunk_size * threads;
 
-                        // Return the best nonce
-                        (best_nonce, best_difficulty, best_hash)
+                            if i == 0 {
+                                progress_bar.set_message(format!(
+                                    "Mining... ({} sec remaining)",
+                                    duration.as_secs().saturating_sub(start_time.elapsed().as_secs()),
+                                ));
+                            }
+                        }
                     }
                 })
             })
             .collect();
 
-        // Join handles and return best nonce
-        let mut best_nonce = 0;
-        let mut best_difficulty = 0;
-        let mut best_hash = Hash::default();
-        for h in handles {
-            if let Ok((nonce, difficulty, hash)) = h.join() {
-                if difficulty > best_difficulty {
-                    best_difficulty = difficulty;
-                    best_nonce = nonce;
-                    best_hash = hash;
-                }
-            }
+        for handle in handles {
+            handle.join().unwrap();
         }
 
-        // Update log
+        let final_best_nonce = best_nonce.load(Ordering::Relaxed);
+        let final_best_difficulty = best_difficulty.load(Ordering::Relaxed);
+        let final_best_hash = {
+            let hash_guard = best_hash.read().unwrap();
+            Hash { h: hash_guard.h, d: hash_guard.d }
+        };
+
         progress_bar.finish_with_message(format!(
             "Best hash: {} (difficulty: {})",
-            bs58::encode(best_hash.h).into_string(),
-            best_difficulty
+            bs58::encode(final_best_hash.h).into_string(),
+            final_best_difficulty
         ));
 
-        Solution::new(best_hash.d, best_nonce.to_le_bytes())
+        if final_best_difficulty >= min_difficulty {
+            Some(Solution::new(final_best_hash.d, final_best_nonce.to_le_bytes()))
+        } else {
+            None
+        }
     }
 
     pub fn check_num_cores(&self, threads: u64) {
