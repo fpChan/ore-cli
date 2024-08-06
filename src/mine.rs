@@ -33,7 +33,7 @@ impl Miner {
         self.check_num_cores(args.threads);
 
         let mut last_submit_time = Instant::now();
-        let submit_interval = Duration::from_secs(120);
+        let submit_interval = Duration::from_secs(200);
 
         // Start mining loop
         loop {
@@ -50,7 +50,7 @@ impl Miner {
             if let Some(solution) = Self::find_hash_par(
                 proof.clone(),
                 args.threads,
-                19, // min_difficulty
+                21, // min_difficulty
                 Duration::from_secs(60), // 增加到 60 秒，以提高找到解的概率
             )
                 .await
