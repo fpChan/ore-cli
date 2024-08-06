@@ -50,7 +50,7 @@ impl Miner {
                 proof.clone(),
                 args.threads,
                 MIN, // min_difficulty
-                Duration::from_secs(80), // 增加到 60 秒，以提高找到解的概率
+                Duration::from_secs(200), // 增加到 60 秒，以提高找到解的概率
             )
                 .await
             {
