@@ -32,7 +32,7 @@ impl Miner {
         self.check_num_cores(args.threads);
 
         let mut last_submit_time = Instant::now();
-        let submit_interval = Duration::from_secs(120); // 两分钟提交一次
+        let submit_interval = Duration::from_secs(120);
 
         // Start mining loop
         loop {
@@ -49,7 +49,7 @@ impl Miner {
                 proof.clone(),
                 args.threads,
                 20, // min_difficulty
-                submit_interval,
+                Duration::from_secs(60), // 增加到 60 秒，以提高找到解的概率
             )
                 .await
             {
@@ -101,7 +101,7 @@ impl Miner {
         let best_difficulty = Arc::new(AtomicU32::new(0));
         let best_hash = Arc::new(std::sync::RwLock::new(Hash::default()));
 
-        let chunk_size = 10_000; // 增大块大小以减少同步开销
+        let chunk_size = 1_000_000; // 增大块大小以减少同步开销
 
         let handles: Vec<_> = (0..threads)
             .map(|i| {
@@ -113,12 +113,11 @@ impl Miner {
                     let best_hash = best_hash.clone();
                     move || {
                         let mut memory = equix::SolverMemory::new();
-                        let mut local_best_nonce = 0;
-                        let mut local_best_difficulty = 0;
-                        let mut local_best_hash = Hash::default();
-                        let mut nonce_base = u64::MAX / threads * i;
+                        let mut rng = rand::thread_rng();
 
                         while start_time.elapsed() < duration {
+                            let nonce_base = rng.gen::<u64>();
+
                             for nonce in nonce_base..nonce_base + chunk_size {
                                 if let Ok(hx) = drillx::hash_with_memory(
                                     &mut memory,
@@ -126,39 +125,23 @@ impl Miner {
                                     &nonce.to_le_bytes(),
                                 ) {
                                     let difficulty = hx.difficulty();
-                                    if difficulty > local_best_difficulty {
-                                        local_best_nonce = nonce;
-                                        local_best_difficulty = difficulty;
-                                        local_best_hash = hx;
-
-                                        // 更新全局最佳结果
-                                        let mut current_best = best_difficulty.load(Ordering::Relaxed);
-                                        while local_best_difficulty > current_best {
-                                            match best_difficulty.compare_exchange_weak(
-                                                current_best,
-                                                local_best_difficulty,
-                                                Ordering::SeqCst,
-                                                Ordering::Relaxed,
-                                            ) {
-                                                Ok(_) => {
-                                                    best_nonce.store(local_best_nonce, Ordering::Relaxed);
-                                                    let mut best_hash_guard = best_hash.write().unwrap();
-                                                    best_hash_guard.h.copy_from_slice(&local_best_hash.h);
-                                                    best_hash_guard.d = local_best_hash.d;
-                                                    break;
-                                                }
-                                                Err(x) => current_best = x,
-                                            }
+                                    let current_best = best_difficulty.load(Ordering::Relaxed);
+                                    if difficulty > current_best {
+                                        if best_difficulty.compare_exchange(current_best, difficulty, Ordering::SeqCst, Ordering::Relaxed).is_ok() {
+                                            best_nonce.store(nonce, Ordering::Relaxed);
+                                            let mut best_hash_guard = best_hash.write().unwrap();
+                                            best_hash_guard.h.copy_from_slice(&hx.h);
+                                            best_hash_guard.d = hx.d;
+                                            println!("New best hash found: {} (difficulty: {})",
+                                                     bs58::encode(hx.h).into_string(), difficulty);
                                         }
                                     }
                                 }
 
-                                if nonce % 1000 == 0 && start_time.elapsed() >= duration {
+                                if nonce % 10000 == 0 && start_time.elapsed() >= duration {
                                     break;
                                 }
                             }
-
-                            nonce_base += chunk_size * threads;
 
                             if i == 0 {
                                 progress_bar.set_message(format!(
