@@ -24,7 +24,7 @@ use crate::{
     Miner,
 };
 
-const MIN: u32 = 22;
+const MIN: u32 = 21;
 
 impl Miner {
     pub async fn mine(&self, args: MineArgs) {
@@ -123,6 +123,8 @@ impl Miner {
                                              bs58::encode(hx.h).into_string(), difficulty);
                                     solution_found.store(true, Ordering::Relaxed);
                                     break;
+                                } else if difficulty + 2 >= min_difficulty {
+                                    println!("Solution found: {} (difficulty: {})", bs58::encode(hx.h).into_string(), difficulty);
                                 }
                             }
 
