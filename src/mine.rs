@@ -1,6 +1,7 @@
 use std::{sync::Arc, time::Instant};
 use std::sync::atomic::{AtomicU64, AtomicU32, Ordering};
 use std::time::Duration;
+use std::sync::atomic::AtomicBool;
 use chrono::Local;
 use colored::*;
 use drillx::{
@@ -50,7 +51,6 @@ impl Miner {
                 proof.clone(),
                 args.threads,
                 MIN, // min_difficulty
-                Duration::from_secs(200), // 增加到 60 秒，以提高找到解的概率
             )
                 .await
             {
@@ -84,15 +84,14 @@ impl Miner {
         proof: Proof,
         threads: u64,
         min_difficulty: u32,
-        duration: Duration,
     ) -> Option<Solution> {
-        let start_time = Instant::now();
         let progress_bar = Arc::new(spinner::new_progress_bar());
         progress_bar.set_message("Mining...");
 
         let best_nonce = Arc::new(AtomicU64::new(0));
         let best_difficulty = Arc::new(AtomicU32::new(0));
         let best_hash = Arc::new(std::sync::RwLock::new(Hash::default()));
+        let solution_found = Arc::new(AtomicBool::new(false));
 
         let handles: Vec<_> = (0..threads)
             .map(|i| {
@@ -102,41 +101,35 @@ impl Miner {
                     let best_nonce = best_nonce.clone();
                     let best_difficulty = best_difficulty.clone();
                     let best_hash = best_hash.clone();
+                    let solution_found = solution_found.clone();
                     move || {
                         let mut memory = equix::SolverMemory::new();
                         let mut nonce = u64::MAX.saturating_div(threads).saturating_mul(i);
 
-                        while start_time.elapsed() < duration {
+                        while !solution_found.load(Ordering::Relaxed) {
                             if let Ok(hx) = drillx::hash_with_memory(
                                 &mut memory,
                                 &proof.challenge,
                                 &nonce.to_le_bytes(),
                             ) {
                                 let difficulty = hx.difficulty();
-                                let current_best = best_difficulty.load(Ordering::Relaxed);
-                                if difficulty > current_best {
-                                    if best_difficulty.compare_exchange(current_best, difficulty, Ordering::SeqCst, Ordering::Relaxed).is_ok() {
-                                        best_nonce.store(nonce, Ordering::Relaxed);
-                                        let mut best_hash_guard = best_hash.write().unwrap();
-                                        best_hash_guard.h.copy_from_slice(&hx.h);
-                                        best_hash_guard.d = hx.d;
-                                        println!("New best hash found: {} (difficulty: {})",
-                                                 bs58::encode(hx.h).into_string(), difficulty);
-                                    }
+                                if difficulty >= min_difficulty {
+                                    best_nonce.store(nonce, Ordering::Relaxed);
+                                    best_difficulty.store(difficulty, Ordering::Relaxed);
+                                    let mut best_hash_guard = best_hash.write().unwrap();
+                                    best_hash_guard.h.copy_from_slice(&hx.h);
+                                    best_hash_guard.d = hx.d;
+                                    println!("Solution found: {} (difficulty: {})",
+                                             bs58::encode(hx.h).into_string(), difficulty);
+                                    solution_found.store(true, Ordering::Relaxed);
+                                    break;
                                 }
-                            }
-
-                            if nonce % 100 == 0 && start_time.elapsed() >= duration {
-                                break;
                             }
 
                             nonce += 1;
 
                             if i == 0 && nonce % 1000 == 0 {
-                                progress_bar.set_message(format!(
-                                    "Mining... ({} sec remaining)",
-                                    duration.as_secs().saturating_sub(start_time.elapsed().as_secs()),
-                                ));
+                                progress_bar.set_message(format!("Mining... (nonce: {})", nonce));
                             }
                         }
                     }
