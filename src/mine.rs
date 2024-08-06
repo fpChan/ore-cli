@@ -1,6 +1,7 @@
 use std::{sync::Arc, time::Instant};
 use std::sync::atomic::{AtomicU64, AtomicU32, Ordering};
 use std::time::Duration;
+use chrono::Local;
 use colored::*;
 use drillx::{
     equix::{self},
@@ -39,7 +40,8 @@ impl Miner {
             // Fetch proof
             let proof = get_proof_with_authority(&self.rpc_client, signer.pubkey()).await;
             println!(
-                "\nStake balance: {} ORE",
+                "\n[{}] Stake balance: {} ORE",
+                Local::now().format("%Y-%m-%d %H:%M:%S"),
                 amount_u64_to_string(proof.balance)
             );
 
