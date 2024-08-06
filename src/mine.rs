@@ -48,7 +48,7 @@ impl Miner {
             if let Some(solution) = Self::find_hash_par(
                 proof.clone(),
                 args.threads,
-                20, // min_difficulty
+                19, // min_difficulty
                 Duration::from_secs(60), // 增加到 60 秒，以提高找到解的概率
             )
                 .await
