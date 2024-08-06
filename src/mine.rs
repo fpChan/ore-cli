@@ -94,8 +94,6 @@ impl Miner {
         let best_difficulty = Arc::new(AtomicU32::new(0));
         let best_hash = Arc::new(std::sync::RwLock::new(Hash::default()));
 
-        let chunk_size = 1_000_000; // 增大块大小以减少同步开销
-
         let handles: Vec<_> = (0..threads)
             .map(|i| {
                 std::thread::spawn({
@@ -106,37 +104,35 @@ impl Miner {
                     let best_hash = best_hash.clone();
                     move || {
                         let mut memory = equix::SolverMemory::new();
-                        let mut rng = rand::thread_rng();
+                        let mut nonce = u64::MAX.saturating_div(threads).saturating_mul(i);
 
                         while start_time.elapsed() < duration {
-                            let nonce_base = rng.gen::<u64>();
-
-                            for nonce in nonce_base..nonce_base + chunk_size {
-                                if let Ok(hx) = drillx::hash_with_memory(
-                                    &mut memory,
-                                    &proof.challenge,
-                                    &nonce.to_le_bytes(),
-                                ) {
-                                    let difficulty = hx.difficulty();
-                                    let current_best = best_difficulty.load(Ordering::Relaxed);
-                                    if difficulty > current_best {
-                                        if best_difficulty.compare_exchange(current_best, difficulty, Ordering::SeqCst, Ordering::Relaxed).is_ok() {
-                                            best_nonce.store(nonce, Ordering::Relaxed);
-                                            let mut best_hash_guard = best_hash.write().unwrap();
-                                            best_hash_guard.h.copy_from_slice(&hx.h);
-                                            best_hash_guard.d = hx.d;
-                                            println!("New best hash found: {} (difficulty: {})",
-                                                     bs58::encode(hx.h).into_string(), difficulty);
-                                        }
+                            if let Ok(hx) = drillx::hash_with_memory(
+                                &mut memory,
+                                &proof.challenge,
+                                &nonce.to_le_bytes(),
+                            ) {
+                                let difficulty = hx.difficulty();
+                                let current_best = best_difficulty.load(Ordering::Relaxed);
+                                if difficulty > current_best {
+                                    if best_difficulty.compare_exchange(current_best, difficulty, Ordering::SeqCst, Ordering::Relaxed).is_ok() {
+                                        best_nonce.store(nonce, Ordering::Relaxed);
+                                        let mut best_hash_guard = best_hash.write().unwrap();
+                                        best_hash_guard.h.copy_from_slice(&hx.h);
+                                        best_hash_guard.d = hx.d;
+                                        println!("New best hash found: {} (difficulty: {})",
+                                                 bs58::encode(hx.h).into_string(), difficulty);
                                     }
-                                }
-
-                                if nonce % 10000 == 0 && start_time.elapsed() >= duration {
-                                    break;
                                 }
                             }
 
-                            if i == 0 {
+                            if nonce % 100 == 0 && start_time.elapsed() >= duration {
+                                break;
+                            }
+
+                            nonce += 1;
+
+                            if i == 0 && nonce % 1000 == 0 {
                                 progress_bar.set_message(format!(
                                     "Mining... ({} sec remaining)",
                                     duration.as_secs().saturating_sub(start_time.elapsed().as_secs()),
