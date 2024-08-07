@@ -38,12 +38,11 @@ impl Miner {
         // Start mining loop
         let mut last_ore_bal = 0;
         let mut last_sol_bal = 0;
-        let mut diff = 0;
         loop {
             // Fetch proof
             let proof = get_proof_with_authority(&self.rpc_client, signer.pubkey()).await;
             if proof.balance != last_ore_bal {
-                diff = proof.balance - last_ore_bal;
+                // diff = proof.balance - last_ore_bal;
                 last_ore_bal = proof.balance;
             }
             let signer = self.signer();
@@ -58,7 +57,7 @@ impl Miner {
                 sol_bal,
                 last_sol_bal - sol_bal,
                 amount_u64_to_string(proof.balance),
-                diff
+                proof.balance - last_ore_bal
             );
             if sol_bal != last_sol_bal {
                 last_sol_bal = sol_bal
