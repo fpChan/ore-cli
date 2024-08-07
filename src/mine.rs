@@ -54,7 +54,7 @@ impl Miner {
                 lamports_to_sol(sol_bal),
                 amount_u64_to_string(proof.balance),
                 lamports_to_sol(last_sol_bal - sol_bal),
-                proof.balance - last_ore_bal
+                amount_u64_to_string(proof.balance - last_ore_bal)
             );
             if sol_bal != last_sol_bal {
                 last_sol_bal = sol_bal
