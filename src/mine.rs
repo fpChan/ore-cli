@@ -192,11 +192,11 @@ impl Miner {
         let new_fee = if difficulty <= MIN + 1 {
             40000
         } else if difficulty < MIN + 4 {
-            80000
+            75000
         } else if difficulty < MIN + 7 {
-            250000
+            150000
         } else if difficulty < MIN + 11 {
-            500000
+            250000
         } else if difficulty < MIN + 14 {
             700000
         } else {
