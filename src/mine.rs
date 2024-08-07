@@ -25,7 +25,7 @@ use crate::{
     Miner,
 };
 
-const MIN: u32 = 17;
+const MIN: u32 = 18;
 
 impl Miner {
     pub async fn mine(&self, args: MineArgs) {
@@ -189,7 +189,7 @@ impl Miner {
     }
 
     fn update_priority_fee(&self, difficulty: u32) {
-        let new_fee = if difficulty <= MIN + 1 {
+        let new_fee = if difficulty < MIN + 1 {
             4000
         } else if difficulty < MIN + 4 {
             70000
