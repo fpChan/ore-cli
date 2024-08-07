@@ -13,6 +13,7 @@ use ore_api::{
     state::{Config, Proof},
 };
 use rand::Rng;
+use solana_program::native_token::lamports_to_sol;
 use solana_program::pubkey::Pubkey;
 use solana_rpc_client::spinner;
 use solana_sdk::signer::Signer;
@@ -41,10 +42,6 @@ impl Miner {
         loop {
             // Fetch proof
             let proof = get_proof_with_authority(&self.rpc_client, signer.pubkey()).await;
-            if proof.balance != last_ore_bal {
-                // diff = proof.balance - last_ore_bal;
-                last_ore_bal = proof.balance;
-            }
             let signer = self.signer();
             let client = self.rpc_client.clone();
 
@@ -54,13 +51,17 @@ impl Miner {
                 "\n[{}] {} {} sol. stake balance: {} ore. last cost {} sol earn {} ore",
                 Local::now().format("%Y-%m-%d %H:%M:%S"),
                 &signer.pubkey(),
-                sol_bal,
-                last_sol_bal - sol_bal,
+                lamports_to_sol(sol_bal),
+                lamports_to_sol(last_sol_bal - sol_bal),
                 amount_u64_to_string(proof.balance),
                 proof.balance - last_ore_bal
             );
             if sol_bal != last_sol_bal {
                 last_sol_bal = sol_bal
+            }
+            if proof.balance != last_ore_bal {
+                // diff = proof.balance - last_ore_bal;
+                last_ore_bal = proof.balance;
             }
 
             // Run drillx
