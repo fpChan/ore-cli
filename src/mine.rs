@@ -25,7 +25,7 @@ use crate::{
     Miner,
 };
 
-const MIN: u32 = 21;
+const MIN: u32 = 19;
 
 impl Miner {
     pub async fn mine(&self, args: MineArgs) {
@@ -60,7 +60,6 @@ impl Miner {
                 last_sol_bal = sol_bal
             }
             if proof.balance != last_ore_bal {
-                // diff = proof.balance - last_ore_bal;
                 last_ore_bal = proof.balance;
             }
 
@@ -114,6 +113,8 @@ impl Miner {
         let best_hash = Arc::new(std::sync::RwLock::new(Hash::default()));
         let solution_found = Arc::new(AtomicBool::new(false));
 
+        let chunk_size = 1_000_000; // 增大块大小以减少同步开销
+
         let handles: Vec<_> = (0..threads)
             .map(|i| {
                 std::thread::spawn({
@@ -125,34 +126,40 @@ impl Miner {
                     let solution_found = solution_found.clone();
                     move || {
                         let mut memory = equix::SolverMemory::new();
-                        let mut nonce = u64::MAX.saturating_div(threads).saturating_mul(i);
+                        let mut rng = rand::thread_rng();
 
                         while !solution_found.load(Ordering::Relaxed) {
-                            if let Ok(hx) = drillx::hash_with_memory(
-                                &mut memory,
-                                &proof.challenge,
-                                &nonce.to_le_bytes(),
-                            ) {
-                                let difficulty = hx.difficulty();
-                                if difficulty >= min_difficulty {
-                                    best_nonce.store(nonce, Ordering::Relaxed);
-                                    best_difficulty.store(difficulty, Ordering::Relaxed);
-                                    let mut best_hash_guard = best_hash.write().unwrap();
-                                    best_hash_guard.h.copy_from_slice(&hx.h);
-                                    best_hash_guard.d = hx.d;
-                                    println!("Solution found: {} (difficulty: {})",
-                                             bs58::encode(hx.h).into_string(), difficulty);
-                                    solution_found.store(true, Ordering::Relaxed);
+                            let nonce_base = rng.gen::<u64>();
+
+                            for nonce in nonce_base..nonce_base + chunk_size {
+                                if let Ok(hx) = drillx::hash_with_memory(
+                                    &mut memory,
+                                    &proof.challenge,
+                                    &nonce.to_le_bytes(),
+                                ) {
+                                    let difficulty = hx.difficulty();
+                                    if difficulty >= min_difficulty {
+                                        best_nonce.store(nonce, Ordering::Relaxed);
+                                        best_difficulty.store(difficulty, Ordering::Relaxed);
+                                        let mut best_hash_guard = best_hash.write().unwrap();
+                                        best_hash_guard.h.copy_from_slice(&hx.h);
+                                        best_hash_guard.d = hx.d;
+                                        println!("Solution found: {} (difficulty: {})",
+                                                 bs58::encode(hx.h).into_string(), difficulty);
+                                        solution_found.store(true, Ordering::Relaxed);
+                                        break;
+                                    } else if difficulty + 3 >= min_difficulty {
+                                        println!("Solution found: {} (difficulty: {})", bs58::encode(hx.h).into_string(), difficulty);
+                                    }
+                                }
+
+                                if solution_found.load(Ordering::Relaxed) {
                                     break;
-                                } else if difficulty + 3 >= min_difficulty {
-                                    println!("Solution found: {} (difficulty: {})", bs58::encode(hx.h).into_string(), difficulty);
                                 }
                             }
 
-                            nonce += 1;
-
-                            if i == 0 && nonce % 1000 == 0 {
-                                progress_bar.set_message(format!("Mining... (nonce: {})", nonce));
+                            if i == 0 {
+                                progress_bar.set_message(format!("Mining... (nonce base: {})", nonce_base));
                             }
                         }
                     }
@@ -200,7 +207,6 @@ impl Miner {
         } else if difficulty < 32 {
             700000
         } else {
-            // self.priority_fee.load(Ordering::Relaxed)
             900000
         };
         self.priority_fee.store(new_fee, Ordering::Relaxed);
