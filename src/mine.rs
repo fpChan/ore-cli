@@ -170,11 +170,15 @@ impl Miner {
     }
 
     fn update_priority_fee(&self, difficulty: u32) {
-        let new_fee = if difficulty < 18 {
-            70000
-        } else if difficulty < 22 {
-            150000
-        } else if difficulty < 30 {
+        let new_fee = if difficulty < MIN {
+            50000
+        } else if difficulty < MIN + 3 {
+            100000
+        } else if difficulty < MIN + 6 {
+            300000
+        } else if difficulty < MIN + 9 {
+            500000
+        } else if difficulty < MIN + 12 {
             700000
         } else {
             // self.priority_fee.load(Ordering::Relaxed)
