@@ -47,7 +47,7 @@ impl Miner {
 
             // Run drillx
             let config = get_config(&self.rpc_client).await;
-            if let Some(solution) = Self::find_hash_par(
+            if let Some(solution) = self.find_hash_par(
                 proof.clone(),
                 args.threads,
                 MIN, // min_difficulty
@@ -67,9 +67,10 @@ impl Miner {
                     find_bus(),
                     solution,
                 ));
+                let priority_fee = self.priority_fee.load(Ordering::Relaxed);
                 match self.send_and_confirm(&ixs, ComputeBudget::Fixed(compute_budget), false).await {
-                    Ok(_) => println!("{}", "Successfully submitted mining solution.".green()),
-                    Err(e) => println!("{} {}", "Failed to submit mining solution:".red(), e),
+                    Ok(_) => println!("{} (priority_fee: {})", "Successfully submitted mining solution.".green(), priority_fee),
+                    Err(e) => println!("{} {} (priority_fee: {})", "Failed to submit mining solution:".red(), e, priority_fee),
                 }
             } else {
                 println!("{}", "No solution found meeting minimum difficulty. Continuing to mine...".yellow());
@@ -81,6 +82,7 @@ impl Miner {
     }
 
     async fn find_hash_par(
+        &self,
         proof: Proof,
         threads: u64,
         min_difficulty: u32,
@@ -150,10 +152,14 @@ impl Miner {
             Hash { h: hash_guard.h, d: hash_guard.d }
         };
 
+        self.update_priority_fee(final_best_difficulty);
+
+        let current_priority_fee = self.priority_fee.load(Ordering::Relaxed);
         progress_bar.finish_with_message(format!(
-            "Best hash: {} (difficulty: {})",
+            "Best hash: {} (difficulty: {}) priority_fee {}",
             bs58::encode(final_best_hash.h).into_string(),
-            final_best_difficulty
+            final_best_difficulty,
+            current_priority_fee
         ));
 
         if final_best_difficulty >= min_difficulty {
@@ -161,6 +167,20 @@ impl Miner {
         } else {
             None
         }
+    }
+
+    fn update_priority_fee(&self, difficulty: u32) {
+        let new_fee = if difficulty < 17 {
+            30000
+        } else if difficulty < 22 {
+            50000
+        } else if difficulty < 30 {
+            700000
+        } else {
+            // self.priority_fee.load(Ordering::Relaxed)
+            900000
+        };
+        self.priority_fee.store(new_fee, Ordering::Relaxed);
     }
 
     pub fn check_num_cores(&self, threads: u64) {

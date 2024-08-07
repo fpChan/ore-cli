@@ -17,7 +17,7 @@ mod upgrade;
 mod utils;
 
 use std::sync::Arc;
-
+use std::sync::atomic::AtomicU64;
 use args::*;
 use clap::{command, Parser, Subcommand};
 use solana_client::nonblocking::rpc_client::RpcClient;
@@ -28,7 +28,7 @@ use solana_sdk::{
 
 struct Miner {
     pub keypair_filepath: Option<String>,
-    pub priority_fee: u64,
+    pub priority_fee: AtomicU64,
     pub rpc_client: Arc<RpcClient>,
 }
 
@@ -185,7 +185,8 @@ impl Miner {
         Self {
             rpc_client,
             keypair_filepath,
-            priority_fee,
+            priority_fee: AtomicU64::new(priority_fee),
+            // priority_fee,
         }
     }
 

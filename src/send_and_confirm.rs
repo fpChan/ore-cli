@@ -1,3 +1,4 @@
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use colored::*;
@@ -70,7 +71,7 @@ impl Miner {
             }
         }
         final_ixs.push(ComputeBudgetInstruction::set_compute_unit_price(
-            self.priority_fee,
+            self.priority_fee.load(Ordering::Relaxed),
         ));
         final_ixs.extend_from_slice(ixs);
 
