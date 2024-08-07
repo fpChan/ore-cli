@@ -36,14 +36,33 @@ impl Miner {
         self.check_num_cores(args.threads);
 
         // Start mining loop
+        let mut last_ore_bal = 0;
+        let mut last_sol_bal = 0;
+        let mut diff = 0;
         loop {
             // Fetch proof
             let proof = get_proof_with_authority(&self.rpc_client, signer.pubkey()).await;
+            if proof.balance != last_ore_bal {
+                diff = proof.balance - last_ore_bal;
+                last_ore_bal = proof.balance;
+            }
+            let signer = self.signer();
+            let client = self.rpc_client.clone();
+
+            // Return error, if balance is zero
+            let sol_bal = client.get_balance(&signer.pubkey()).await.unwrap();
             println!(
-                "\n[{}] Stake balance: {} ORE",
+                "\n[{}] {} {} sol. stake balance: {} ore. last cost {} sol earn {} ore",
                 Local::now().format("%Y-%m-%d %H:%M:%S"),
-                amount_u64_to_string(proof.balance)
+                &signer.pubkey(),
+                sol_bal,
+                last_sol_bal - sol_bal,
+                amount_u64_to_string(proof.balance),
+                diff
             );
+            if sol_bal != last_sol_bal {
+                last_sol_bal = sol_bal
+            }
 
             // Run drillx
             let config = get_config(&self.rpc_client).await;
@@ -174,7 +193,7 @@ impl Miner {
             40000
         } else if difficulty < MIN + 4 {
             80000
-        } else if difficulty < MIN + 7 {
+        } else if difficulty < MIN + 8 {
             250000
         } else if difficulty < MIN + 10 {
             500000
