@@ -113,7 +113,9 @@ impl Miner {
         let best_hash = Arc::new(std::sync::RwLock::new(Hash::default()));
         let solution_found = Arc::new(AtomicBool::new(false));
 
-        let chunk_size = 1_000_000; // 增大块大小以减少同步开销
+        let chunk_size = 1_000_000;
+        let time_limit = Duration::from_secs(200); // 设置1分钟的时间限制
+        let start_time = Instant::now();
 
         let handles: Vec<_> = (0..threads)
             .map(|i| {
@@ -128,10 +130,10 @@ impl Miner {
                         let mut memory = equix::SolverMemory::new();
                         let mut rng = rand::thread_rng();
 
-                        while !solution_found.load(Ordering::Relaxed) {
+                        'outer: while !solution_found.load(Ordering::Relaxed) && start_time.elapsed() < time_limit {
                             let nonce_base = rng.gen::<u64>();
 
-                            for nonce in nonce_base..nonce_base + chunk_size {
+                            for (index, nonce) in (nonce_base..nonce_base + chunk_size).enumerate() {
                                 if let Ok(hx) = drillx::hash_with_memory(
                                     &mut memory,
                                     &proof.challenge,
@@ -147,19 +149,24 @@ impl Miner {
                                         println!("Solution found: {} (difficulty: {})",
                                                  bs58::encode(hx.h).into_string(), difficulty);
                                         solution_found.store(true, Ordering::Relaxed);
-                                        break;
+                                        break 'outer;
                                     } else if difficulty + 3 >= min_difficulty {
-                                        println!("Solution found: {} (difficulty: {})", bs58::encode(hx.h).into_string(), difficulty);
+                                        println!("Close solution found: {} (difficulty: {})", bs58::encode(hx.h).into_string(), difficulty);
                                     }
                                 }
 
-                                if solution_found.load(Ordering::Relaxed) {
-                                    break;
+                                if index % 2000 == 0 && i == 0 {
+                                    let elapsed = start_time.elapsed();
+                                    progress_bar.set_message(format!(
+                                        "Mining... (nonce: {}, time elapsed: {:.2}s)",
+                                        nonce,
+                                        elapsed.as_secs_f64()
+                                    ));
                                 }
-                            }
 
-                            if i == 0 {
-                                progress_bar.set_message(format!("Mining... (nonce base: {})", nonce_base));
+                                if solution_found.load(Ordering::Relaxed) || start_time.elapsed() >= time_limit {
+                                    break 'outer;
+                                }
                             }
                         }
                     }
@@ -181,11 +188,13 @@ impl Miner {
         self.update_priority_fee(final_best_difficulty);
 
         let current_priority_fee = self.priority_fee.load(Ordering::Relaxed);
+        let total_time = start_time.elapsed();
         progress_bar.finish_with_message(format!(
-            "Best hash: {} (difficulty: {}) priority_fee {}",
+            "Best hash: {} (difficulty: {}) priority_fee {} - Time taken: {:.2}s",
             bs58::encode(final_best_hash.h).into_string(),
             final_best_difficulty,
-            current_priority_fee
+            current_priority_fee,
+            total_time.as_secs_f64()
         ));
 
         if final_best_difficulty >= min_difficulty {
