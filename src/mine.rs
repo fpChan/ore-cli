@@ -52,8 +52,8 @@ impl Miner {
                 Local::now().format("%Y-%m-%d %H:%M:%S"),
                 &signer.pubkey(),
                 lamports_to_sol(sol_bal),
-                lamports_to_sol(last_sol_bal - sol_bal),
                 amount_u64_to_string(proof.balance),
+                lamports_to_sol(last_sol_bal - sol_bal),
                 proof.balance - last_ore_bal
             );
             if sol_bal != last_sol_bal {
