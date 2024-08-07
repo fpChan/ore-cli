@@ -190,7 +190,7 @@ impl Miner {
 
     fn update_priority_fee(&self, difficulty: u32) {
         let new_fee = if difficulty <= MIN + 1 {
-            5000
+            10000
         } else if difficulty < MIN + 4 {
             40000
         } else if difficulty < MIN + 7 {
