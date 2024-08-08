@@ -158,7 +158,7 @@ impl Miner {
                                 }
                             }
 
-                            if index % 2000 == 0 && index == 0 {
+                            if index % 2000 == 0 {
                                 let elapsed = Instant::now() - start_time;
                                 progress_bar.set_message(format!(
                                     "Mining... (index {} nonce: {}, difficulty: {}, time elapsed: {:.2}s)",
