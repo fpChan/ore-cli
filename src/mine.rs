@@ -2,7 +2,7 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::Local;
 use colored::*;
@@ -115,12 +115,16 @@ impl Miner {
 
         let best_results = Arc::new(Mutex::new(Vec::new()));
         let start_time = Instant::now();
+        // let time_limit = Duration::from_secs(150); // 2 minutes
+
+        let solution_found = Arc::new(AtomicBool::new(false));
 
         let handles: Vec<_> = (0..threads)
-            .map(|_| {
+            .map(|i| {
                 let proof = proof.clone();
                 let progress_bar = progress_bar.clone();
                 let best_results = best_results.clone();
+                let solution_found = solution_found.clone();
 
                 std::thread::spawn(move || {
                     let mut memory = equix::SolverMemory::new();
@@ -130,7 +134,7 @@ impl Miner {
                     let mut best_nonce = 0;
                     let mut best_hash = Arc::new(hash::Hash::default());
 
-                    while Instant::now() - start_time < TIME_LIMIT {
+                    'outer: while !solution_found.load(Ordering::Relaxed) && start_time.elapsed() < TIME_LIMIT {
                         let nonce_base = rng.gen::<u64>();
 
                         for (index, nonce) in (nonce_base..nonce_base + CHUNK_SIZE as u64).enumerate() {
@@ -145,39 +149,37 @@ impl Miner {
                                     best_nonce = nonce;
                                     best_hash = Arc::new(hash::Hash { d: hx.d });
 
+                                    // Lock the best_results and update the vector
+                                    let mut best_results_guard = best_results.lock().unwrap();
+                                    best_results_guard.push(BestResult {
+                                        difficulty,
+                                        nonce,
+                                        hash: best_hash.clone(),
+                                    });
+
                                     if difficulty >= min_difficulty {
-                                        // Lock the best_results and update the vector
-                                        let mut best_results_guard = best_results.lock().unwrap();
-                                        best_results_guard.push(BestResult {
-                                            difficulty,
-                                            nonce,
-                                            hash: best_hash.clone(),
-                                        });
-                                        break;
+                                        solution_found.store(true, Ordering::Relaxed);
+                                        break 'outer;
                                     }
                                 }
-                            }
 
-                            if index % 2000 == 0 {
-                                let elapsed = Instant::now() - start_time;
-                                progress_bar.set_message(format!(
-                                    "Mining... (index {} nonce: {}, difficulty: {}, time elapsed: {:.2}s)",
-                                    index,
-                                    nonce,
-                                    best_difficulty,
-                                    elapsed.as_secs_f64()
-                                ));
+                                if index % 2000 == 0 {
+                                    let elapsed = start_time.elapsed();
+                                    progress_bar.set_message(format!(
+                                        "Mining... (index {} nonce: {}, difficulty: {}, time elapsed: {:.2}s)",
+                                        index,
+                                        nonce,
+                                        best_difficulty,
+                                        elapsed.as_secs_f64()
+                                    ));
+                                }
+
+                                if solution_found.load(Ordering::Relaxed) || start_time.elapsed() >= TIME_LIMIT {
+                                    break 'outer;
+                                }
                             }
                         }
                     }
-
-                    // Lock the best_results and update the vector
-                    let mut best_results_guard = best_results.lock().unwrap();
-                    best_results_guard.push(BestResult {
-                        difficulty: best_difficulty,
-                        nonce: best_nonce,
-                        hash: best_hash.clone(),
-                    });
                 })
             })
             .collect();
@@ -193,13 +195,8 @@ impl Miner {
         if let Some(best_result) = best_results_guard.first() {
             self.update_priority_fee(best_result.difficulty);
             Some(Solution::new(best_result.hash.d, best_result.nonce.to_le_bytes()))
-            // if best_result.difficulty >= min_difficulty {
-            //     self.update_priority_fee(best_result.difficulty);
-            //     Some(Solution::new(best_result.hash.d, best_result.nonce.to_le_bytes()))
-            // } else {
-            //     None
-            // }
         } else {
+            println!("failed best_results len{}", best_results_guard.len());
             None
         }
     }
