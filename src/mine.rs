@@ -164,9 +164,10 @@ impl Miner {
                                 if index % 2000 == 0 && i == 0 {
                                     let elapsed = start_time.elapsed();
                                     progress_bar.set_message(format!(
-                                        "Mining... (index {} nonce: {}, time elapsed: {:.2}s)",
+                                        "Mining... (index {} nonce: {}, difficulty: {}, time elapsed: {:.2}s)",
                                         index,
                                         nonce,
+                                        best_difficulty,
                                         elapsed.as_secs_f64()
                                     ));
                                 }
