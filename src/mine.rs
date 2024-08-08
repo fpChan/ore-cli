@@ -2,6 +2,7 @@ use std::{sync::Arc, time::Instant};
 use std::sync::atomic::{AtomicU64, AtomicU32, Ordering};
 use std::time::Duration;
 use std::sync::atomic::AtomicBool;
+use std::sync::Mutex;
 use chrono::Local;
 use colored::*;
 use drillx::{
@@ -25,7 +26,7 @@ use crate::{
     Miner,
 };
 
-const MIN: u32 = 19;
+const MIN: u32 = 22;
 
 impl Miner {
     pub async fn mine(&self, args: MineArgs) {
@@ -110,20 +111,23 @@ impl Miner {
 
         let best_nonce = Arc::new(AtomicU64::new(0));
         let best_difficulty = Arc::new(AtomicU32::new(0));
-        let best_hash = Arc::new(std::sync::RwLock::new(Hash::default()));
+        let best_hash = Arc::new(Mutex::new(Hash::default()));
         let solution_found = Arc::new(AtomicBool::new(false));
 
         let chunk_size = 1_000_000;
-        let time_limit = Duration::from_secs(200); // 设置1分钟的时间限制
+        let time_limit = Duration::from_secs(120); // 2 minutes
         let start_time = Instant::now();
+
+        let mut best_difficulty = 0;
+        let mut best_nonce = 0;
 
         let handles: Vec<_> = (0..threads)
             .map(|i| {
                 std::thread::spawn({
                     let proof = proof.clone();
                     let progress_bar = progress_bar.clone();
-                    let best_nonce = best_nonce.clone();
-                    let best_difficulty = best_difficulty.clone();
+                    let mut best_nonce = best_nonce.clone();
+                    let mut best_difficulty = best_difficulty.clone();
                     let best_hash = best_hash.clone();
                     let solution_found = solution_found.clone();
                     move || {
@@ -140,16 +144,18 @@ impl Miner {
                                     &nonce.to_le_bytes(),
                                 ) {
                                     let difficulty = hx.difficulty();
-                                    if difficulty >= min_difficulty {
-                                        best_nonce.store(nonce, Ordering::Relaxed);
-                                        best_difficulty.store(difficulty, Ordering::Relaxed);
-                                        let mut best_hash_guard = best_hash.write().unwrap();
+                                    if difficulty > best_difficulty {
+                                        best_difficulty = difficulty;
+                                        best_nonce = nonce;
+                                        let mut best_hash_guard = best_hash.lock().unwrap();
                                         best_hash_guard.h.copy_from_slice(&hx.h);
                                         best_hash_guard.d = hx.d;
                                         println!("Solution found: {} (difficulty: {})",
                                                  bs58::encode(hx.h).into_string(), difficulty);
-                                        solution_found.store(true, Ordering::Relaxed);
-                                        break 'outer;
+                                        if difficulty >= min_difficulty {
+                                            solution_found.store(true, Ordering::Relaxed);
+                                            break 'outer;
+                                        }
                                     } else if difficulty + 3 >= min_difficulty {
                                         println!("Close solution found: {} (difficulty: {})", bs58::encode(hx.h).into_string(), difficulty);
                                     }
@@ -179,11 +185,11 @@ impl Miner {
             handle.join().unwrap();
         }
 
-        let final_best_nonce = best_nonce.load(Ordering::Relaxed);
-        let final_best_difficulty = best_difficulty.load(Ordering::Relaxed);
+        let final_best_difficulty = best_difficulty;
+        let final_best_nonce = best_nonce;
         let final_best_hash = {
-            let hash_guard = best_hash.read().unwrap();
-            Hash { h: hash_guard.h, d: hash_guard.d }
+            let best_hash_guard = best_hash.lock().unwrap();
+            Hash { h: best_hash_guard.h, d: best_hash_guard.d }
         };
 
         self.update_priority_fee(final_best_difficulty);
@@ -209,7 +215,7 @@ impl Miner {
         let new_fee = if difficulty <= 17 {
             10000
         } else if difficulty < 21 {
-            40000
+            30000
         } else if difficulty < 26 {
             150000
         } else if difficulty < 30 {
