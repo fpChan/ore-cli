@@ -150,8 +150,8 @@ impl Miner {
                                         let mut best_hash_guard = best_hash.lock().unwrap();
                                         best_hash_guard.h.copy_from_slice(&hx.h);
                                         best_hash_guard.d = hx.d;
-                                        println!("Solution found: {} (difficulty: {})",
-                                                 bs58::encode(hx.h).into_string(), difficulty);
+                                        // println!("Solution found: {} (difficulty: {})",
+                                        //          bs58::encode(hx.h).into_string(), difficulty);
                                         if difficulty >= min_difficulty {
                                             solution_found.store(true, Ordering::Relaxed);
                                             break 'outer;
