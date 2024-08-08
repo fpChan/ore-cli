@@ -193,10 +193,23 @@ impl Miner {
         best_results_guard.sort_by(|a, b| b.difficulty.cmp(&a.difficulty));
 
         if let Some(best_result) = best_results_guard.first() {
-            self.update_priority_fee(best_result.difficulty);
-            Some(Solution::new(best_result.hash.d, best_result.nonce.to_le_bytes()))
+            let best_difficulty = best_result.difficulty;
+            let best_nonce = best_result.nonce;
+            let best_hash = best_result.hash.clone();
+
+            self.update_priority_fee(best_difficulty);
+            let current_priority_fee = self.priority_fee.load(Ordering::Relaxed);
+            let total_time = start_time.elapsed();
+
+            progress_bar.finish_with_message(format!(
+                "(difficulty: {}) priority_fee {} - Time taken: {:.2}s",
+                best_difficulty,
+                current_priority_fee
+                total_time.as_secs_f64()
+            ));
+            Some(Solution::new(best_hash.d, best_nonce.to_le_bytes()))
         } else {
-            println!("failed best_results len{}", best_results_guard.len());
+            println!("failed best_results len {}", best_results_guard.len());
             None
         }
     }
