@@ -115,7 +115,7 @@ impl Miner {
         let solution_found = Arc::new(AtomicBool::new(false));
 
         let chunk_size = 1_000_000;
-        let time_limit = Duration::from_secs(120); // 2 minutes
+        let time_limit = Duration::from_secs(150); // 2 minutes
         let start_time = Instant::now();
 
         let mut best_difficulty = 0;
@@ -208,7 +208,8 @@ impl Miner {
         if final_best_difficulty >= min_difficulty {
             Some(Solution::new(final_best_hash.d, final_best_nonce.to_le_bytes()))
         } else {
-            None
+            Some(Solution::new(final_best_hash.d, final_best_nonce.to_le_bytes()))
+            // None
         }
     }
 
