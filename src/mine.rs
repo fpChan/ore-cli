@@ -204,7 +204,7 @@ impl Miner {
             progress_bar.finish_with_message(format!(
                 "(difficulty: {}) priority_fee {} - Time taken: {:.2}s",
                 best_difficulty,
-                current_priority_fee
+                current_priority_fee,
                 total_time.as_secs_f64()
             ));
             Some(Solution::new(best_hash.d, best_nonce.to_le_bytes()))
